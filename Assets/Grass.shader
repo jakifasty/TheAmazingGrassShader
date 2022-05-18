@@ -6,6 +6,12 @@ Shader "Roystan/Grass"
         _TopColor("Top Color", Color) = (1,1,1,1)
 		_BottomColor("Bottom Color", Color) = (1,1,1,1)
 		_TranslucentGain("Translucent Gain", Range(0,1)) = 0.5
+		_BendRotationRandom("Bend Rotation Random", Range(0, 1)) = 0.2 //adding new property for random forward bend
+
+		_BladeWidth("Blade Width", Float) = 0.05 //adding new properties to control width and height
+		_BladeWidthRandom("Blade Width Random", Float) = 0.02
+		_BladeHeight("Blade Height", Float) = 0.5
+		_BladeHeightRandom("Blade Height Random", Float) = 0.3
     }
 
 	CGINCLUDE
@@ -20,6 +26,19 @@ Shader "Roystan/Grass"
 	{
 		return frac(sin(dot(co.xyz, float3(12.9898, 78.233, 53.539))) * 43758.5453);
 	}
+
+	struct geometryOutput //this creates a geometry shader 
+	{
+		float4 pos : SV_POSITION;
+		float2 uv: TEXTCOORD0; //declare uv coordinates
+	};
+
+	float _BendRotationRandom;
+
+	float _BladeHeight;
+	float _BladeHeightRandom;
+	float _BladeWidth;
+	float _BladeWidthRandom;
 
 	// Construct a rotation matrix that rotates around the provided axis, sourced from:
 	// https://gist.github.com/keijiro/ee439d5e7388f3aafc5296005c8c3f33
@@ -40,9 +59,98 @@ Shader "Roystan/Grass"
 			);
 	}
 
-	float4 vert(float4 vertex : POSITION) : SV_POSITION
+	geometryOutput VertexOutput(float3 pos, float uv)
 	{
-		return UnityObjectToClipPos(vertex);
+		geometryOutput o;
+		o.pos = UnityObjectToClipPos(pos);
+		o.uv = uv; //assign uv vectors to the geometryOutput object
+		return o;
+	}
+
+	struct vertexInput { //vertex input for the surface of the sphere
+
+		float4 vertex : POSITION;
+		float3 normal : NORMAL;
+		float4 tangent : TANGENT;
+	};
+
+	struct vertexOutput {
+		float4 vertex : SV_POSITION;
+		float3 normal : NORMAL;
+		float4 tangent : TANGENT;
+	};
+
+
+
+	[maxvertexcount(3)] //This tells the GPU that we will emit (but are not required to) at most 3 vertices
+	//this takes in a vertex as input and output a single triangle to represent to represent a blade of grass
+	void geo(triangle vertexOutput IN[3]: SV_POSITION, inout TriangleStream<geometryOutput> triStream)
+	{ //this a geometry shader
+
+		float3 pos = IN[0].vertex;
+
+		float3 vNormal = IN[0].normal;
+		float4 vTangent = IN[0].tangent;
+		float3 vBinormal = cross(vNormal, vTangent) * vTangent.w; //third vector perpendicular to its two input vectors
+		geometryOutput o;
+
+		float3x3 tangentToLocal = float3x3(
+			vTangent.x, vBinormal.x, vNormal.x,
+			vTangent.y, vBinormal.y, vNormal.y,
+			vTangent.z, vBinormal.z, vNormal.z
+		);
+
+		//create a new matrix to rotate the grass along its X axis, and a property to control this rotation
+		float3x3 bendRotationMatrix = AngleAxis3x3(rand(pos.zzx) * _BendRotationRandom * UNITY_PI * 0.5, float3(-1, 0, 0));
+
+		float3x3 facingRotationMatrix = AngleAxis3x3(rand(pos) * UNITY_TWO_PI, float3(0, 0, 1)); //declaring rotation matrix to make look the grass more natural
+		float3x3 transformationMatrix = mul(mul(tangentToLocal, facingRotationMatrix), bendRotationMatrix); // apply this matrix through rotation
+
+		float height = (rand(pos.zyx) * 2 - 1) * _BladeHeightRandom + _BladeHeight;
+		float width = (rand(pos.xzy) * 2 - 1) * _BladeWidthRandom + _BladeWidth;
+
+		//this emmits a triangle every time it is called
+		/*o.pos = UnityObjectToClipPos(pos + float4(0.5, 0, 0, 1));
+		triStream.Append(o);
+
+		o.pos = UnityObjectToClipPos(pos + float4(-0.5, 0, 0, 1));
+		triStream.Append(o);
+
+		o.pos = UnityObjectToClipPos(pos + float4(0, 1, 0, 1));
+		triStream.Append(o);*/
+
+		//triStream.Append(VertexOutput(pos + float3(0.5, 0, 0)));
+		//triStream.Append(VertexOutput(pos + float3(-0.5, 0, 0)));
+		//triStream.Append(VertexOutput(pos + float3(0, 1, 0)));
+
+		/*triStream.Append(VertexOutput(pos + mul(tangentToLocal, float3(0.5, 0, 0)), float2(0, 0)));
+		triStream.Append(VertexOutput(pos + mul(tangentToLocal, float3(-0.5, 0, 0)), float2(1, 0))); 
+		triStream.Append(VertexOutput(pos + mul(tangentToLocal, float3(0, 0, 1)), float2(0.5, 1)));*/
+
+		//triStream.Append(VertexOutput(pos + mul(transformationMatrix, float3(0.5, 0, 0)), float2(0, 0)));  //added as a 3rd parameter the uv Vector2
+		//triStream.Append(VertexOutput(pos + mul(transformationMatrix, float3(-0.5, 0, 0)), float2(1, 0))); //added as a 3rd parameter the uv Vector2
+		//triStream.Append(VertexOutput(pos + mul(transformationMatrix, float3(0, 0, 1)), float2(0.5, 1))); //modifyed by float3(0, 1, 0)
+
+		triStream.Append(VertexOutput(pos + mul(transformationMatrix, float3(width, 0, 0)), float2(0, 0)));
+		triStream.Append(VertexOutput(pos + mul(transformationMatrix, float3(-width, 0, 0)), float2(1, 0)));
+		triStream.Append(VertexOutput(pos + mul(transformationMatrix, float3(0, 0, height)), float2(0.5, 1)));
+	}
+
+	/*float4 vert(float4 vertex : POSITION) : SV_POSITION
+	{
+		//return UnityObjectToClipPos(vertex);
+		return vertex; //updating the return call in the vertex shader
+	}*/
+
+	vertexOutput vert(vertexInput v)
+	{
+		//return UnityObjectToClipPos(vertex);
+		vertexOutput o;
+		o.vertex = v.vertex;
+		o.normal = v.normal;
+		o.tangent = v.tangent;
+		//return vertex; //updating the return call in the vertex shader
+		return o;
 	}
 	ENDCG
 
@@ -62,6 +170,8 @@ Shader "Roystan/Grass"
             #pragma vertex vert
             #pragma fragment frag
 			#pragma target 4.6
+
+			#pragma geometry geo //geometry shader (pragma directives in HLSL), to make sure it uses the geometry shader
             
 			#include "Lighting.cginc"
 
@@ -69,9 +179,12 @@ Shader "Roystan/Grass"
 			float4 _BottomColor;
 			float _TranslucentGain;
 
-			float4 frag (float4 vertex : SV_POSITION, fixed facing : VFACE) : SV_Target
+			//now sample our top and bottom colors in the fragment shader using the UV, and interpolate
+			//between them using lerp. We'll also need to modify the fragment shader's parameters to take
+			//geometryOutput as input, rather just only the float4 position.
+			float4 frag (geometryOutput i, fixed facing : VFACE) : SV_Target
             {	
-				return float4(1, 1, 1, 1);
+				return lerp(_BottomColor, _TopColor, i.uv.y);
             }
             ENDCG
         }
