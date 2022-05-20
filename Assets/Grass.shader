@@ -12,11 +12,21 @@ Shader "Roystan/Grass"
 		_BladeWidthRandom("Blade Width Random", Float) = 0.02
 		_BladeHeight("Blade Height", Float) = 0.5
 		_BladeHeightRandom("Blade Height Random", Float) = 0.3
+
+		//wind properties
+		_WindDistortionMap("Wind Distortion Map", 2D) = "white" {}
+		_WindFrequency("Wind Frequency", Vector) = (0.05, 0.05, 0, 0)
+		_WindStrength("Wind Strength", Float) = 1
+
+		//control the tessellation amount
+		_TessellationUniform("Tessellation Uniform", Range(2, 128)) = 1
+
     }
 
 	CGINCLUDE
 	#include "UnityCG.cginc"
 	#include "Autolight.cginc"
+	#include "Shaders/CustomTessellation.cginc"
 
 	// Simple noise function, sourced from http://answers.unity.com/answers/624136/view.html
 	// Extended discussion on this function can be found at the following link:
@@ -39,6 +49,12 @@ Shader "Roystan/Grass"
 	float _BladeHeightRandom;
 	float _BladeWidth;
 	float _BladeWidthRandom;
+
+	sampler2D _WindDistortionMap; //used for the wind prop 
+	float4 _WindDistortionMap_ST;
+	float _WindStrength;
+
+	float2 _WindFrequency; //how often the wind will blow
 
 	// Construct a rotation matrix that rotates around the provided axis, sourced from:
 	// https://gist.github.com/keijiro/ee439d5e7388f3aafc5296005c8c3f33
@@ -67,20 +83,6 @@ Shader "Roystan/Grass"
 		return o;
 	}
 
-	struct vertexInput { //vertex input for the surface of the sphere
-
-		float4 vertex : POSITION;
-		float3 normal : NORMAL;
-		float4 tangent : TANGENT;
-	};
-
-	struct vertexOutput {
-		float4 vertex : SV_POSITION;
-		float3 normal : NORMAL;
-		float4 tangent : TANGENT;
-	};
-
-
 
 	[maxvertexcount(3)] //This tells the GPU that we will emit (but are not required to) at most 3 vertices
 	//this takes in a vertex as input and output a single triangle to represent to represent a blade of grass
@@ -100,11 +102,17 @@ Shader "Roystan/Grass"
 			vTangent.z, vBinormal.z, vNormal.z
 		);
 
+		float2 uv = pos.xz * _WindDistortionMap_ST.xy + _WindDistortionMap_ST.zw + _WindFrequency * _Time.y; //calculate uv coordinates as a fucntion of wind parameters
+		float2 windSample = (tex2Dlod(_WindDistortionMap, float4(uv, 0, 0)).xy * 2 - 1) * _WindStrength;
+		float3 wind = normalize(float3(windSample.x, windSample.y, 0));
+		float3x3 windRotation = AngleAxis3x3(UNITY_PI * windSample, wind);
+
 		//create a new matrix to rotate the grass along its X axis, and a property to control this rotation
 		float3x3 bendRotationMatrix = AngleAxis3x3(rand(pos.zzx) * _BendRotationRandom * UNITY_PI * 0.5, float3(-1, 0, 0));
 
 		float3x3 facingRotationMatrix = AngleAxis3x3(rand(pos) * UNITY_TWO_PI, float3(0, 0, 1)); //declaring rotation matrix to make look the grass more natural
-		float3x3 transformationMatrix = mul(mul(tangentToLocal, facingRotationMatrix), bendRotationMatrix); // apply this matrix through rotation
+		//float3x3 transformationMatrix = mul(mul(tangentToLocal, facingRotationMatrix), bendRotationMatrix); // apply this matrix through rotation
+		float3x3 transformationMatrix = mul(mul(mul(tangentToLocal, windRotation), facingRotationMatrix), bendRotationMatrix); // apply this matrix through rotation
 
 		float height = (rand(pos.zyx) * 2 - 1) * _BladeHeightRandom + _BladeHeight;
 		float width = (rand(pos.xzy) * 2 - 1) * _BladeWidthRandom + _BladeWidth;
@@ -142,16 +150,6 @@ Shader "Roystan/Grass"
 		return vertex; //updating the return call in the vertex shader
 	}*/
 
-	vertexOutput vert(vertexInput v)
-	{
-		//return UnityObjectToClipPos(vertex);
-		vertexOutput o;
-		o.vertex = v.vertex;
-		o.normal = v.normal;
-		o.tangent = v.tangent;
-		//return vertex; //updating the return call in the vertex shader
-		return o;
-	}
 	ENDCG
 
     SubShader
@@ -170,6 +168,8 @@ Shader "Roystan/Grass"
             #pragma vertex vert
             #pragma fragment frag
 			#pragma target 4.6
+			#pragma hull hull
+			#pragma domain domain
 
 			#pragma geometry geo //geometry shader (pragma directives in HLSL), to make sure it uses the geometry shader
             
